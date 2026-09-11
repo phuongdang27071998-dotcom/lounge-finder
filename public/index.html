@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Lounge Finder V37</title>
+  <link rel="stylesheet" href="/styles.css?v=37">
+</head>
+<body>
+<header>
+  <div class="wrap top">
+    <div class="brand">Lounge Finder</div>
+    <div id="updatedTop">Dữ liệu cập nhật: --</div>
+  </div>
+</header>
+<main class="wrap">
+  <section id="searchView" class="search-shell">
+    <div class="eyebrow">LINKCARE LOUNGE SEARCH</div>
+    <h1>Tra cứu phòng chờ sân bay</h1>
+    <p>Nhập mã IATA hoặc tên sân bay, sau đó <strong>chọn đúng sân bay trong danh sách gợi ý</strong>.</p>
+    <form id="searchForm" class="search-card">
+      <label>Sân bay
+        <div class="autocomplete">
+          <input id="airportInput" autocomplete="off" placeholder="Nhập mã IATA hoặc tên sân bay, ví dụ HKG..." required>
+          <div id="suggestions" class="suggestions hidden"></div>
+        </div>
+      </label>
+      <div class="two-col">
+        <label>Ngày & giờ bay <span>không bắt buộc</span><input id="datetimeInput" type="datetime-local"></label>
+        <label class="initial-terminal-filter">Terminal
+          <select id="terminalSelect" disabled><option value="all">Chọn sân bay trước</option></select>
+          <small id="terminalHint">Terminal sẽ hiện sau khi bạn chọn sân bay từ danh sách.</small>
+        </label>
+      </div>
+      <button id="searchBtn" type="submit">Tìm kiếm</button>
+      <div class="source-note">Nguồn dữ liệu: LoungeKey LinkcareVN · dữ liệu được tự động kiểm tra và cập nhật khi tra cứu.</div>
+    </form>
+  </section>
+
+  <section id="resultsView" class="hidden">
+    <button class="back" id="backBtn">← Tìm kiếm khác</button>
+    <div class="result-head">
+      <div><h2 id="airportTitle"></h2><p id="summaryLine"></p></div>
+      <div class="result-actions">
+        <div class="seg lang-switch"><button data-result-lang="vi" class="active">VI</button><button data-result-lang="en">EN</button></div>
+        <button class="outline" id="summaryBtn">Tổng hợp thông tin</button>
+      </div>
+    </div>
+    <div class="filter-row">
+      <div class="tabs" id="scopeTabs">
+        <button class="active" data-filter="all">Tất cả</button>
+        <button data-filter="domestic">Nội địa</button>
+        <button data-filter="international">Quốc tế</button>
+      </div>
+      <label class="terminal-filter">Phân loại theo Terminal
+        <select id="resultTerminalSelect">
+          <option value="all">Tất cả terminal</option>
+        </select>
+      </label>
+    </div>
+    <div id="cards"></div>
+    <div id="emptyState" class="empty hidden">Không có phòng chờ phù hợp với bộ lọc hiện tại.</div>
+  </section>
+</main>
+
+<footer class="sticky-note" aria-label="Bản quyền và liên hệ">
+  <div class="sticky-note-inner">
+    <div class="note-icon">i</div>
+    <div class="note-copy">
+      <div><strong>Lưu ý:</strong> Bản quyền nội dung thuộc về <strong>Đặng Phương</strong>.</div>
+      <div>Mọi thắc mắc vui lòng liên hệ qua <strong>Zalo Phương - 0961053913</strong>.</div>
+      <div>Thông tin có thể sai sót hoặc chưa được cập nhật, vui lòng <strong>kiểm tra lại với website chính thức</strong> trước khi sử dụng.</div>
+    </div>
+    <a class="zalo-card" href="https://zalo.me/0961053913" target="_blank" rel="noopener" title="Liên hệ Zalo Phương">
+      <img src="/zalo-qr-phuong.png" alt="Zalo Phương - 0961053913">
+      <span>Quét mã Zalo</span>
+    </a>
+  </div>
+</footer>
+
+<div id="modal" class="modal hidden" aria-hidden="true">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="modalTitle">Tổng hợp thông tin</h3>
+      <div class="modal-actions">
+        <div class="seg"><button data-lang="vi" class="lang active">VI</button><button data-lang="en" class="lang">EN</button></div>
+        <button class="x" id="closeModal" aria-label="Đóng">×</button>
+      </div>
+    </div>
+    <div class="editorbar">
+      <button data-cmd="bold"><b>B</b></button><button data-cmd="italic"><i>I</i></button><button data-cmd="underline"><u>U</u></button>
+      <span class="divider"></span><span class="toolbar-label">Nội dung có thể chỉnh sửa trước khi sao chép</span>
+    </div>
+    <div id="summaryText" class="summary-editor" contenteditable="true"></div>
+    <div class="modal-foot"><span id="copyStatus"></span><button id="copyBtn">Sao chép</button></div>
+  </div>
+</div>
+<script src="/app.js?v=37"></script>
+</body>
+</html>

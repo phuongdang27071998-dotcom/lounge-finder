@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: lounge-finder-v37
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: AUTO_REFRESH_ON_SEARCH
+        value: "0"
+      - key: STALE_HOURS
+        value: "24"
+      - key: TRANSLATE_CONCURRENCY
+        value: "4"
+      - key: TZ
+        value: Asia/Ho_Chi_Minh
