@@ -1,0 +1,20 @@
+{
+  "name": "linkcare-lounge-finder",
+  "version": "38.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "sync:airport": "node src/cli-sync.js",
+    "postinstall": "playwright install chromium",
+    "test": "node src/hours.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "node-cron": "^4.2.1",
+    "playwright": "^1.55.0"
+  }
+}

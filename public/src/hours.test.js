@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { evaluateOpeningHours } from './hours.js';
+const t=(text,dt,status)=>assert.equal(evaluateOpeningHours(text,dt).status,status,`${text} @ ${dt}`);
+t('24 hours daily','2026-09-10T23:00','open');
+t('06:00 - 20:00 daily','2026-09-10T19:00','open');
+t('06:00 - 20:00 daily','2026-09-10T23:00','closed');
+t('22:00 - 02:00 daily','2026-09-10T23:00','open');
+t('22:00 - 02:00 daily','2026-09-10T03:00','closed');
+t('Open 24 hours daily. Peak periods: 17:00-19:00 and 22:00-02:00.','2026-09-10T23:00','open');
+t('Open 24 hours daily. Single FlexiSuite stay is limited to 3 hours, available from 08:00 to 22:00.','2026-09-10T23:00','open');
+console.log('hours parser tests passed');
