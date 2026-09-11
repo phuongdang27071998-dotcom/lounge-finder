@@ -1,23 +1,21 @@
-# Lounge Finder V37 — bản Web công khai
+# Lounge Finder V41
 
-V37 được thiết kế để chạy trên một máy chủ web. Người sử dụng cuối chỉ cần mở URL bằng Chrome/Edge/Safari; không cần CMD, Node.js hay cài đặt gì trên máy.
+V41 tối ưu cho bản web Render: kết quả chỉ được trả khi đã có đồng thời EN + VI, với ngân sách xử lý cứng dưới 1 phút.
 
-## Cam kết luồng tra cứu V37
-- Một lượt tra cứu có ngân sách tối đa 55 giây ở server và 59 giây ở trình duyệt.
-- Kết quả thành công chỉ được trả khi dữ liệu EN và VI đều đã sẵn sàng.
-- VI và EN là hai chế độ hiển thị riêng; chuyển ngôn ngữ không gọi lại LoungeKey và không dịch lại.
-- Dữ liệu đã cache trả nhanh hơn đáng kể.
-- Nếu nguồn hoặc dịch không hoàn tất trong giới hạn, web báo lỗi để thử lại thay vì trả tiếng Anh vào chế độ VI.
+## Tối ưu chính
+- Lấy chi tiết lounge bằng HTTP song song, không dùng Chromium trong đường tra cứu web.
+- Timeout từng trang LoungeKey 7 giây; tối đa 12 request song song.
+- Dịch toàn bộ sân bay theo các batch lớn song song thay vì dịch lounge-by-lounge.
+- Tái sử dụng bản dịch cache và không dịch trùng các section Opening/Location/Conditions.
+- Hai đợt dịch có giới hạn thời gian để phục hồi lỗi mạng tạm thời.
+- API search có log thời gian từng bước: `source-sync`, `translate`, `response`.
+- `/healthz` luôn trả HTTP 200 cho Render.
+- Bỏ tải Chromium trong `npm ci`, giúp deploy nhanh và nhẹ hơn.
 
-## Đưa lên Internet (không cần CMD cho người dùng)
-1. Đưa toàn bộ thư mục này lên một Git repository.
-2. Tạo một Web Service Node.js trên nhà cung cấp hosting và trỏ vào repository.
-3. Build command: `npm ci`
-4. Start command: `npm start`
-5. Health check: `/api/health`
-6. Sau khi deploy, gửi URL HTTPS cho người dùng. Họ chỉ mở link và sử dụng.
+## Render
+Build: `npm ci`
+Start: `npm run start`
+Health Check: `/healthz` hoặc `/`
 
-File `render.yaml` đã được thêm để hỗ trợ triển khai kiểu Blueprint trên Render.
-
-## Lưu ý kiến trúc
-Đây không thể là một file HTML tĩnh duy nhất vì Lounge Finder cần server để gọi nguồn LoungeKey, lưu cache SQLite và dịch EN→VI. V37 đóng gói cả frontend + backend thành một website duy nhất; CMD chỉ còn cần cho phát triển local, không cần cho người dùng sau khi website được deploy.
+## Cam kết xử lý
+Server đặt deadline 57 giây; trình duyệt đặt 59,5 giây. Nếu nguồn LoungeKey hoặc dịch bên thứ ba bị lỗi hoàn toàn, hệ thống trả lỗi trong giới hạn này thay vì treo nhiều phút. Khi thành công, response có sẵn cả VI và EN.

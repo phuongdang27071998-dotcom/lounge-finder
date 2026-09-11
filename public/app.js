@@ -103,11 +103,12 @@ $('#searchForm').addEventListener('submit',async e=>{
     scope='all';
     const data=await loadSearch(); applyData(data); renderResults();
     if(data.hydrating) progressiveHydrate(code);
-    // V37 successful responses already include complete VI + EN data.
+    // V38: results are always shown; any remaining VI translation completes in background.
+    // V40: server returns VI + EN together; no post-response translation polling is needed.
   }catch(err){alert(err.message||'Không thể tra cứu dữ liệu.');}
   finally{btn.disabled=false;btn.textContent=old;}
 });
-async function loadSearch(extra={}){const params=new URLSearchParams({...currentQuery,terminal:'all',scope:'all',...extra});const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),59000);try{const r=await fetch('/api/search?'+params,{signal:ctl.signal});const data=await r.json().catch(()=>({}));if(!r.ok) throw new Error(data.error||'Không thể lấy dữ liệu từ LoungeKey.');return data;}catch(e){if(e?.name==='AbortError') throw new Error('Tra cứu đã vượt quá 59 giây. Vui lòng thử lại; hệ thống sẽ tiếp tục dùng cache ở lần sau.');throw e;}finally{clearTimeout(timer);}}
+async function loadSearch(extra={}){const params=new URLSearchParams({...currentQuery,terminal:'all',scope:'all',...extra});const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),59500);try{const r=await fetch('/api/search?'+params,{signal:ctl.signal});const data=await r.json().catch(()=>({}));if(!r.ok) throw new Error(data.error||'Không thể lấy dữ liệu từ LoungeKey.');return data;}catch(e){if(e?.name==='AbortError') throw new Error('Tra cứu đã vượt quá 59,5 giây. Vui lòng thử lại; hệ thống sẽ tiếp tục dùng cache ở lần sau.');throw e;}finally{clearTimeout(timer);}}
 let hydrateRun=0;
 
 let translationRun=0;

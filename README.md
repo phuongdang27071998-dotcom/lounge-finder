@@ -1,29 +1,21 @@
-# Lounge Finder V37
+# Lounge Finder V41
 
-Bản V37: kết quả thành công có sẵn đồng thời dữ liệu VI và EN, thời gian tương tác giới hạn dưới 1 phút. Có cấu hình triển khai web để người dùng cuối chỉ cần mở URL, không chạy CMD.
+V41 tối ưu cho bản web Render: kết quả chỉ được trả khi đã có đồng thời EN + VI, với ngân sách xử lý cứng dưới 1 phút.
 
-# Lounge Finder V36
+## Tối ưu chính
+- Lấy chi tiết lounge bằng HTTP song song, không dùng Chromium trong đường tra cứu web.
+- Timeout từng trang LoungeKey 7 giây; tối đa 12 request song song.
+- Dịch toàn bộ sân bay theo các batch lớn song song thay vì dịch lounge-by-lounge.
+- Tái sử dụng bản dịch cache và không dịch trùng các section Opening/Location/Conditions.
+- Hai đợt dịch có giới hạn thời gian để phục hồi lỗi mạng tạm thời.
+- API search có log thời gian từng bước: `source-sync`, `translate`, `response`.
+- `/healthz` luôn trả HTTP 200 cho Render.
+- Bỏ tải Chromium trong `npm ci`, giúp deploy nhanh và nhẹ hơn.
 
-V36 sửa phần song ngữ và tốc độ dịch:
+## Render
+Build: `npm ci`
+Start: `npm run start`
+Health Check: `/healthz` hoặc `/`
 
-- Mặc định hiển thị **VI + EN** song song. Có thể chuyển riêng VI hoặc EN.
-- Ở chế độ VI, nội dung chưa dịch sẽ hiển thị “Đang dịch sang tiếng Việt…” thay vì giả vờ dùng tiếng Anh.
-- Dịch cả sân bay theo lô, không dịch tuần tự từng lounge.
-- Kết quả tiếng Anh hiển thị ngay; bản dịch VI chạy nền và giao diện tự cập nhật.
-- Cache VI cũ thiếu section sẽ tự được phát hiện và sửa.
-- Giữ filter Terminal, link chi tiết, hình ảnh và cache tốc độ cao.
-
-## Chạy trên Windows
-1. Tắt bản cũ bằng STOP_LOUNGE_FINDER.vbs.
-2. Mở OPEN_LOUNGE_FINDER.vbs.
-3. Nếu trình duyệt còn giao diện cũ, nhấn Ctrl+F5 một lần.
-
-Lưu ý: lần đầu với sân bay chưa có bản dịch VI có thể cần vài giây để hoàn tất dịch nền; EN vẫn dùng được ngay.
-
-
-## V36
-- Chỉ còn 2 chế độ ngôn ngữ: VI và EN.
-- VI là mặc định.
-- Tra cứu tương tác có ngân sách tối đa dưới 1 phút: HTTP sync tối đa 38 giây + chờ dịch VI tối đa 15 giây; không chờ Playwright trong request.
-- Nếu nguồn LoungeKey chưa phản hồi kịp, trả thông báo trong 1 phút và tiếp tục cập nhật nền cho lần tra sau.
-- Cache đã có dữ liệu trả gần như ngay lập tức.
+## Cam kết xử lý
+Server đặt deadline 57 giây; trình duyệt đặt 59,5 giây. Nếu nguồn LoungeKey hoặc dịch bên thứ ba bị lỗi hoàn toàn, hệ thống trả lỗi trong giới hạn này thay vì treo nhiều phút. Khi thành công, response có sẵn cả VI và EN.

@@ -1,13 +1,12 @@
 {
   "name": "linkcare-lounge-finder",
-  "version": "37.0.0",
+  "version": "41.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "sync:airport": "node src/cli-sync.js",
-    "postinstall": "playwright install chromium",
     "test": "node src/hours.test.js"
   },
   "dependencies": {

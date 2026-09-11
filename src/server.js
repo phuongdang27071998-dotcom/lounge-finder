@@ -4,7 +4,7 @@ import cron from 'node-cron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { searchAirports, getAirport, getLounges, recentSyncRuns, listAirportCodes } from './db.js';
-import { syncAirport, fastSyncAirport, translateCachedAirport, searchSourceAirports, discoverAirportIndex } from './scraper.js';
+import { syncAirport, fastSyncAirport, translateCachedAirport, translateCachedAirportFast, searchSourceAirports, discoverAirportIndex } from './scraper.js';
 import { evaluateOpeningHours } from './hours.js';
 import { seed } from './seed.js';
 
@@ -65,6 +65,16 @@ function cacheNeedsViRepair(lounges=[]){
   return checked>0 && broken>0;
 }
 
+function cacheNeedsCoreViRepair(lounges=[]){
+  if(!lounges.length) return false;
+  for(const l of lounges){
+    for(const [en,vi] of [[l.opening_en,l.opening_vi],[l.location_en,l.location_vi],[l.conditions_en,l.conditions_vi],[l.notes_en,l.notes_vi],[l.additional_en,l.additional_vi]]){
+      if(viFieldBroken(en,vi)) return true;
+    }
+  }
+  return false;
+}
+
 async function syncAirportWithRetry(code,attempts=2){
   let last;
   for(let i=0;i<attempts;i++){
@@ -94,10 +104,13 @@ function translateAirportInBackground(code){
 }
 function refreshAirportInBackground(code){
   if(refreshInFlight.has(code)) return refreshInFlight.get(code);
-  const p=syncAirportWithRetry(code,2).catch(e=>console.error('background sync failed',code,e.message)).finally(()=>refreshInFlight.delete(code));
+  const p=(async()=>{await fastSyncAirport(code,{translate:false});await translateCachedAirportFast(code,{deadlineMs:30000});})()
+    .catch(e=>console.error('background fast refresh failed',code,e.message))
+    .finally(()=>refreshInFlight.delete(code));
   refreshInFlight.set(code,p); return p;
 }
-app.get('/api/health',(req,res)=>res.json({ok:true,version:'37.0.0',source:process.env.SOURCE_URL||'https://loungefinder.loungekey.com/en/linkcarevn/',time:new Date().toISOString()}));
+app.get('/api/health',(req,res)=>res.json({ok:true,version:'41.0.0',source:process.env.SOURCE_URL||'https://loungefinder.loungekey.com/en/linkcarevn/',time:new Date().toISOString()}));
+app.get('/healthz',(req,res)=>res.status(200).json({ok:true,version:'41.0.0'}));
 app.get('/api/airports',async(req,res)=>{
   const q=String(req.query.q||'').trim(); const cached=searchAirports(q);
   if(cached.length || q.length<2 || req.query.source==='0') return res.json(cached);
@@ -136,72 +149,79 @@ app.get('/api/terminal-options',async(req,res)=>{
 });
 
 app.get('/api/search',async(req,res)=>{
-  // V37: one hard interactive deadline. The response is sent only after EN data
-  // and its VI translation are both ready, or the request fails before 60 seconds.
-  const deadlineAt=Date.now()+55000;
+  // V40: VI + EN are prepared before the response is sent.
+  // Hard server budget is 57s so the browser still has a little margin under 60s.
+  const started=Date.now();
+  const deadlineAt=started+57000;
   const remaining=()=>Math.max(0,deadlineAt-Date.now());
   const code=String(req.query.airport||'').trim().toUpperCase();
   if(!/^[A-Z]{3}$/.test(code)) return res.status(400).json({error:'Vui lòng nhập mã sân bay IATA gồm 3 ký tự.'});
-  let a=getAirport(code); let refreshError='';
-  let cachedLounges=getLounges(code);
+  const log=(step,extra='')=>console.log(`[search ${code}] ${step} +${Date.now()-started}ms ${extra}`);
+  log('start');
+  let a=getAirport(code); let cachedLounges=getLounges(code); let refreshed=false; let refreshError='';
   const firstLookup=!a || !cachedLounges.length;
   const repairIncompleteCache=cacheNeedsRepair(cachedLounges);
-  const repairViCache=cacheNeedsViRepair(cachedLounges);
-  let refreshed=false;
-  // Fast cache strategy: first lookup waits for source; subsequent searches return cache immediately.
-  // Stale data refreshes in background so the user is never blocked by LoungeKey on normal searches.
-  let hydrating=false;
-  if(firstLookup || repairIncompleteCache){
-    // V36: hard response budget. Direct HTTP detail sync gets at most 38s.
-    // Never block an interactive search on Playwright; robust repair continues in background.
-    try{
-      await withTimeout(fastSyncAirport(code,{translate:false}),Math.min(36000,Math.max(1000,remaining()-16000)),'Đồng bộ LoungeKey');
-      a=getAirport(code); cachedLounges=getLounges(code); refreshed=true; hydrating=false;
-      if(cacheNeedsRepair(cachedLounges)) { hydrating=true; refreshAirportInBackground(code); }
-    } catch(fastErr){
-      refreshError=fastErr.message;
-      a=getAirport(code); cachedLounges=getLounges(code);
-      if(!a || !cachedLounges.length) {
-        // Start robust repair for the next attempt, but return within the 1-minute SLA.
-        refreshAirportInBackground(code);
-        return res.status(504).json({error:`Chưa lấy xong dữ liệu sân bay ${code} trong giới hạn 1 phút. Hệ thống đang tiếp tục cập nhật nền, vui lòng thử lại sau ít phút.`,detail:fastErr.message});
-      }
-      hydrating=cacheNeedsRepair(cachedLounges);
-      if(hydrating) refreshAirportInBackground(code);
+  try{
+    if(firstLookup || repairIncompleteCache){
+      log('source-sync-start',`cached=${cachedLounges.length}`);
+      const sourceBudget=Math.min(17000,Math.max(6500,remaining()-35000));
+      await withTimeout(fastSyncAirport(code,{translate:false}),sourceBudget,'Đồng bộ LoungeKey');
+      refreshed=true; a=getAirport(code); cachedLounges=getLounges(code);
+      log('source-sync-done',`lounges=${cachedLounges.length}`);
+    } else if(autoRefreshOnSearch && req.query.autorefresh==='1' && isStale(a)) {
+      refreshAirportInBackground(code);
     }
-  } else if(autoRefreshOnSearch && req.query.autorefresh==='1' && isStale(a)) {
-    // V28: chỉ refresh đầy đủ khi được yêu cầu rõ ràng. Lịch cron vẫn tự cập nhật dữ liệu hằng ngày.
-    refreshAirportInBackground(code);
+  }catch(e){
+    refreshError=e.message; a=getAirport(code); cachedLounges=getLounges(code);
+    log('source-sync-error',e.message);
+    // If useful cache exists, continue to translation instead of failing the whole request.
+    if(!a || !cachedLounges.length || cacheNeedsRepair(cachedLounges)){
+      refreshAirportInBackground(code);
+      return res.status(504).json({error:`Chưa lấy đủ dữ liệu phòng chờ cho ${code} trong giới hạn 1 phút. Vui lòng thử lại.`,detail:e.message});
+    }
   }
   if(!a) return res.status(404).json({error:`Không tìm thấy dữ liệu sân bay ${code}.`});
+
+  // Translation is synchronous for the interactive request. We translate the whole airport
+  // in a handful of large parallel batches instead of lounge-by-lounge.
+  cachedLounges=getLounges(code);
   let viPending=cacheNeedsViRepair(cachedLounges);
   if(viPending && req.query.translate!=='0'){
-    const budget=Math.max(1000,remaining()-1500);
+    log('translate-start');
+    const budget=Math.min(35000,Math.max(9000,remaining()-1000));
     try{
-      await withTimeout(translateAirportInBackground(code),budget,'Dịch tiếng Việt');
-    }catch(e){ refreshError=refreshError||e.message; }
-    cachedLounges=getLounges(code);
-    viPending=cacheNeedsViRepair(cachedLounges);
+      let tr=await withTimeout(translateCachedAirportFast(code,{deadlineMs:budget}),budget+500,'Dịch tiếng Việt');
+      log('translate-wave-1',`complete=${tr.complete} missing=${tr.missing}`);
+      cachedLounges=getLounges(code); viPending=cacheNeedsCoreViRepair(cachedLounges);
+      // One short second wave can recover a transient Google request failure while
+      // still respecting the 1-minute end-to-end deadline.
+      if(viPending && remaining()>6500){
+        tr=await withTimeout(translateCachedAirportFast(code,{deadlineMs:Math.min(remaining()-1200,9000)}),Math.min(remaining()-700,9500),'Dịch tiếng Việt lần 2');
+        log('translate-wave-2',`complete=${tr.complete} missing=${tr.missing}`);
+        cachedLounges=getLounges(code); viPending=cacheNeedsCoreViRepair(cachedLounges);
+      }
+    }catch(e){ refreshError=refreshError||e.message; log('translate-error',e.message); }
   }
-  // Never label English as Vietnamese. V37 guarantees that a successful search
-  // already contains both language datasets.
+
+  // The requested contract is two complete languages at response time.
+  // We do not silently put English into VI fields.
   if(viPending){
-    return res.status(503).json({
-      error:`Chưa hoàn tất bản dịch tiếng Việt cho ${code} trong giới hạn 1 phút. Vui lòng bấm Tra cứu lại; dữ liệu đang được giữ trong cache.`,
-      detail:refreshError||'Vietnamese translation incomplete',
-      retryable:true
-    });
+    log('translate-incomplete');
+    translateAirportInBackground(code);
+    return res.status(503).json({error:`Chưa hoàn tất bản dịch tiếng Việt cho ${code} trong giới hạn 1 phút. Hệ thống đã lưu dữ liệu gốc và đang thử lại bản dịch.`,retryable:true});
   }
+
   const terminal=String(req.query.terminal||'all').trim().toLowerCase();
   const scope=String(req.query.scope||'all').trim().toLowerCase();
   const datetime=String(req.query.datetime||'').trim();
   const onlyAvailable=req.query.available!=='0';
-  let lounges=(cachedLounges.length?cachedLounges:getLounges(code)).map(hydrateTerminal);
+  let lounges=getLounges(code).map(hydrateTerminal);
   if(terminal && terminal!=='all') lounges=lounges.filter(l=>terminal==='__unknown__'?!l.terminal:(l.terminal && (l.terminal.toLowerCase()===terminal || l.terminal.toLowerCase().includes(terminal) || terminal.includes(l.terminal.toLowerCase()))));
   if(scope!=='all') lounges=lounges.filter(l=>l.access_scope==='all' || l.access_scope===scope);
   lounges=lounges.map(l=>({...l,availability:evaluateOpeningHours(l.opening_en,datetime)}));
   if(datetime && onlyAvailable) lounges=lounges.filter(l=>l.availability.status!=='closed');
-  res.json({airport:{...a,terminals:[...new Set([...(a.terminals||[]),...lounges.map(x=>x.terminal).filter(Boolean)])]},lounges,query:{datetime,terminal:req.query.terminal||'all',scope,onlyAvailable},refreshed,refreshError,cacheMode:(firstLookup||repairIncompleteCache)?'fast-complete':'fast-cache',hydrating,translationPending:false});
+  log('response',`lounges=${lounges.length}`);
+  res.json({airport:{...a,terminals:[...new Set([...(a.terminals||[]),...lounges.map(x=>x.terminal).filter(Boolean)])]},lounges,query:{datetime,terminal:req.query.terminal||'all',scope,onlyAvailable},refreshed,refreshError,cacheMode:firstLookup?'fresh-vi-en':'cache-vi-en',hydrating:false,translationPending:false,elapsedMs:Date.now()-started});
 });
 app.get('/api/sync-status/:airport',(req,res)=>res.json(recentSyncRuns(req.params.airport,10)));
 app.post('/api/sync/:airport',async(req,res)=>{
@@ -213,6 +233,6 @@ cron.schedule(process.env.CRON_SCHEDULE||'15 3 * * *',async()=>{
   const configured=(process.env.AUTO_SYNC_AIRPORTS||'').split(',').map(x=>x.trim().toUpperCase()).filter(Boolean);
   // Refresh every airport that users have already searched, plus any explicitly configured airports.
   const airports=[...new Set([...listAirportCodes(),...configured])];
-  for(const code of airports){try{console.log('sync',code,await syncAirport(code));}catch(e){console.error('sync failed',code,e.message)}}
+  for(const code of airports){try{const x=await fastSyncAirport(code,{translate:false});await translateCachedAirportFast(code,{deadlineMs:30000});console.log('sync',code,x);}catch(e){console.error('sync failed',code,e.message)}}
 },{timezone:process.env.TZ||'Asia/Ho_Chi_Minh'});
-const port=Number(process.env.PORT||3000); app.listen(port,()=>console.log(`Lounge Finder V37 (VI+EN ready together, <= 1 minute) running at http://localhost:${port}`));
+const port=Number(process.env.PORT||3000); app.listen(port,()=>console.log(`Lounge Finder V41 (VI+EN together, hard < 1 minute budget) running at http://localhost:${port}`));

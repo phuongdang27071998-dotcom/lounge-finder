@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { upsertAirport, upsertLounge, getLounge, getAirport, updateLoungeTerminal, deleteLoungesNotIn, startSyncRun, finishSyncRun, markAirportSyncFailure } from './db.js';
-import { translateVi, translateViBatch, translateManyVi } from './translate.js';
+import { translateVi, translateViBatch, translateManyVi, translateManyViFast } from './translate.js';
 
 const ROOT = process.env.SOURCE_URL || 'https://loungefinder.loungekey.com/en/linkcarevn/';
 const SOURCE_CODE = process.env.SOURCE_CODE || 'LSAPLINKCAREV23';
@@ -14,6 +14,12 @@ fs.mkdirSync(diagnosticsDir, { recursive: true });
 
 const clean = (s='') => String(s).replace(/\u00a0/g,' ').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
 const same = (a,b) => clean(a) === clean(b);
+async function fetchWithTimeout(url, options={}, timeoutMs=8000){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try{return await fetch(url,{...options,signal:controller.signal});}
+  finally{clearTimeout(timer);}
+}
 const codeFromUrl = (u='') => { try { return new URL(u).searchParams.get('loungecode') || ''; } catch { return ''; } };
 async function viValue(previous,enKey,viKey,newEnglish){
   const en=clean(newEnglish);
@@ -267,7 +273,7 @@ export async function discoverAirportIndex(airportCode){
   // V28 fast path: the LoungeKey airport page is server-rendered, so terminal names
   // and lounge links can be read with one lightweight HTTP request instead of launching Chromium.
   const airportUrl=new URL('lounge-detail/',ROOT); airportUrl.searchParams.set('airportcode',code);
-  const r=await fetch(airportUrl.href,{headers:{'accept':'text/html,application/xhtml+xml','user-agent':'Mozilla/5.0'}});
+  const r=await fetchWithTimeout(airportUrl.href,{headers:{'accept':'text/html,application/xhtml+xml','user-agent':'Mozilla/5.0'}},Number(process.env.INDEX_FETCH_TIMEOUT_MS||7000));
   if(!r.ok) throw new Error(`LoungeKey ${r.status}`);
   const html=await r.text();
   const decode=(x='')=>String(x)
@@ -397,14 +403,14 @@ export async function fastSyncAirport(airportCode,{translate=true}={}){
     if(!links.length) throw new Error(`Không đọc được danh sách phòng chờ của ${code}.`);
     const terminals=new Set(index.terminals||[]); const currentCodes=[]; const lounges=[];
     let cursor=0;
-    const concurrency=Math.max(2,Math.min(10,Number(process.env.FAST_SYNC_CONCURRENCY||8)));
+    const concurrency=Math.max(2,Math.min(10,Number(process.env.FAST_SYNC_CONCURRENCY||12)));
     async function worker(){
       while(true){
         const idx=cursor++; if(idx>=links.length) return;
         const link=links[idx]; const loungeCode=link.loungeCode;
         const previous=getLounge(code,loungeCode); currentCodes.push(loungeCode);
         try{
-          const r=await fetch(link.href,{headers:{'accept':'text/html,application/xhtml+xml','user-agent':'Mozilla/5.0'}});
+          const r=await fetchWithTimeout(link.href,{headers:{'accept':'text/html,application/xhtml+xml','user-agent':'Mozilla/5.0'}},Number(process.env.DETAIL_FETCH_TIMEOUT_MS||7000));
           if(!r.ok) throw new Error(`LoungeKey detail ${r.status}`);
           const html=await r.text();
           const extracted=parseDetailHtmlFast(html,link.href); const sections=extracted.sections||{};
@@ -528,6 +534,74 @@ export async function translateCachedAirport(airportCode){
     count++;
   }
   return {code,count:rows.length,translated:count};
+}
+
+
+export async function translateCachedAirportFast(airportCode,{deadlineMs=22000}={}){
+  const code=clean(airportCode).toUpperCase();
+  const { getLounges } = await import('./db.js');
+  const rows=getLounges(code)||[];
+  if(!rows.length) return {code,count:0,translated:0,complete:false,missing:0};
+  const headingMap={
+    'opening hours':'Giờ hoạt động','hours of operation':'Giờ hoạt động','location':'Vị trí',
+    'conditions':'Điều kiện sử dụng','conditions of use':'Điều kiện sử dụng','conditions of access':'Điều kiện sử dụng',
+    'important information':'Thông tin quan trọng','important info':'Thông tin quan trọng','please note':'Lưu ý',
+    'additional information':'Thông tin bổ sung','additional info':'Thông tin bổ sung','other information':'Thông tin bổ sung','more information':'Thông tin bổ sung'
+  };
+  const sectionCoreKey=(title='')=>{
+    const k=String(title).toLowerCase().replace(/[:：]\s*$/,'').trim();
+    if(k.startsWith('opening')||k==='hours of operation') return 'opening';
+    if(k==='location'||k.startsWith('where')) return 'location';
+    if(k.startsWith('conditions')||k.startsWith('access conditions')) return 'conditions';
+    if(k.startsWith('important')||k.startsWith('please note')) return 'notes';
+    if(k.startsWith('additional')||k.startsWith('other information')||k.startsWith('more information')) return 'additional';
+    return '';
+  };
+  const enKey={opening:'opening_en',location:'location_en',conditions:'conditions_en',notes:'notes_en',additional:'additional_en'};
+  const viKey={opening:'opening_vi',location:'location_vi',conditions:'conditions_vi',notes:'notes_vi',additional:'additional_vi'};
+  const values=[]; const indexByText=new Map();
+  const addText=(text='')=>{const t=clean(text);if(!t)return -1;if(indexByText.has(t))return indexByText.get(t);const i=values.length;values.push(t);indexByText.set(t,i);return i;};
+  const plans=rows.map(l=>{
+    const core={};
+    for(const k of Object.keys(enKey)){
+      const en=clean(l[enKey[k]]||''); const vi=clean(l[viKey[k]]||'');
+      core[k]={en,existing:(vi&&vi.toLowerCase()!==en.toLowerCase())?vi:'',idx:(en&&(!vi||vi.toLowerCase()===en.toLowerCase()))?addText(en):-1};
+    }
+    const sections=l.source_sections&&typeof l.source_sections==='object'?l.source_sections:{};
+    const oldVi=l.source_sections_vi&&typeof l.source_sections_vi==='object'?l.source_sections_vi:{};
+    const sectionPlans=[];
+    for(const [title,value] of Object.entries(sections)){
+      if(!clean(value)) continue;
+      const k=String(title).toLowerCase().replace(/[:：]\s*$/,'').trim();
+      const coreKey=sectionCoreKey(title); const old=oldVi[title]||{};
+      const titleVi=headingMap[k]||clean(old.title_vi||'');
+      const valueExisting=clean(old.value_vi||'');
+      const titleIdx=titleVi?-1:addText(title);
+      // Do not translate core section text twice: reuse opening/location/conditions/etc.
+      const valueIdx=coreKey?-1:((!valueExisting||valueExisting.toLowerCase()===clean(value).toLowerCase())?addText(value):-1);
+      sectionPlans.push({title,k,coreKey,old,titleVi,titleIdx,valueIdx});
+    }
+    return {l,core,sectionPlans};
+  });
+  const translated=await translateManyViFast(values,{deadlineMs,batchChars:Number(process.env.FOREGROUND_TRANSLATE_BATCH_CHARS||5200),batchItems:Number(process.env.FOREGROUND_TRANSLATE_BATCH_ITEMS||18)});
+  const textAt=i=>i>=0?clean(translated[i]||''):'';
+  let missing=0;
+  for(const {l,core,sectionPlans} of plans){
+    const vi={};
+    for(const k of Object.keys(core)){
+      vi[k]=textAt(core[k].idx)||core[k].existing||'';
+      if(core[k].en && !vi[k]) missing++;
+    }
+    const sourceSectionsVi={};
+    for(const sp of sectionPlans){
+      const titleVi=sp.titleVi||textAt(sp.titleIdx)||sp.title;
+      const valueVi=sp.coreKey?(vi[sp.coreKey]||clean(sp.old.value_vi||'')):(textAt(sp.valueIdx)||clean(sp.old.value_vi||''));
+      if(!valueVi) missing++;
+      sourceSectionsVi[sp.title]={title_vi:titleVi,value_vi:valueVi};
+    }
+    upsertLounge({...l,opening_vi:vi.opening||'',location_vi:vi.location||'',conditions_vi:vi.conditions||'',notes_vi:vi.notes||'',additional_vi:vi.additional||'',source_sections_vi:sourceSectionsVi,updated_at:l.updated_at||new Date().toISOString()});
+  }
+  return {code,count:rows.length,translated:rows.length,complete:missing===0,missing};
 }
 
 export async function syncAirport(airportCode){
